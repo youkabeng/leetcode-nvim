@@ -4,11 +4,13 @@ import re
 
 import neovim
 import requests
+import time
 
 LC_HOME = '.leetcode-nvim/'
 LC_CONFIG = LC_HOME + 'config.json'
 LC_SESSION = LC_HOME + 'session.json'
 LC_PROBLEMS = LC_HOME + 'problems.json'
+LC_PROBLEMS_TMP = LC_HOME + 'problems_tmp.txt'
 LC_PROBLEMS_HOME = LC_HOME + 'problems/'
 LC_SOLUTIONS_HOME = LC_HOME + 'solutions/'
 
@@ -20,6 +22,9 @@ LC_PROBLEM_CONCURRENCY = 'concurrency'
 
 LC_PROBLEM_REPR_FULL = 'No. %d %s <%s>'
 LC_PROBLEM_REPR_COMPACT = 'no-%d-%s'
+
+REGEXP_LINE = 'No\\. (\\d) .* <([A-Za-z0-9\\-]*)>'
+REGEXP_LINE_COMAPCT = 'no-(\\d)-(.+)\\.([a-z]+)'
 
 LC_ENDPOINT_CN = "leetcode.cn"
 LC_ENDPOINT_US = "leetcode.com"
@@ -35,7 +40,7 @@ URLS = {
     'referer': 'https://%s/problems/%s/',
     'run': 'https://%s/problems/%s/interpret_solution/',
     'run_check': 'https://%s/submissions/detail/%s/check/',
-    'submit': ''
+    'latest_submission': 'https://%s/submissions/latest/'
 }
 
 EXTENSIONS = {
@@ -74,21 +79,12 @@ COMMENTS = {
     'typescript': '//'
 }
 
-default_lang = 'c'
-default_problem_id = 1
-
 
 def init_leetcode_home():
     leetcode_home = get_path(LC_HOME)
     if not os.path.exists(leetcode_home):
         os.mkdir(leetcode_home)
-        # create config.json
-        with open(get_path(LC_CONFIG), 'w') as outf:
-            d = {'default_lang': default_lang}
-            json.dump(d, outf)
-        # create problems dir
         os.mkdir(get_path(LC_PROBLEMS_HOME))
-        # create solutions dir
         os.mkdir(get_path(LC_SOLUTIONS_HOME))
 
 
@@ -120,16 +116,29 @@ def find_lang_by_extension(extension):
             return k
 
 
-def extract_problem_id_and_title(line):
-    p = re.compile('No\\. (\\d) .* <([A-Za-z0-9\\-]*)>')
-    return p.findall(line)[0]
+def extract_problem_data(line):
+    if re.match(REGEXP_LINE, line):
+        p = re.compile(REGEXP_LINE)
+    elif re.match(REGEXP_LINE_COMAPCT, line):
+        p = re.compile(REGEXP_LINE_COMAPCT)
+    else:
+        return None, None, None
+
+    tp = p.findall(line)[0]
+    if len(tp) == 3:
+        return tp
+    else:
+        return *tp, None
 
 
-class LeetCodeSession:
+class LeetcodeSession:
     _SESSION_FILE = get_path(LC_SESSION)
 
     def __init__(self):
         init_leetcode_home()
+        self._configs = {
+            'default_lang': 'c'
+        }
         self._endpoint = None
         self._csrftoken = None
         self._leetcode_session = None
@@ -137,13 +146,19 @@ class LeetCodeSession:
         if self.is_logged_in():
             self._api = _LeetCodeApi(self._endpoint, self._csrftoken, self._leetcode_session)
 
+    def set_config(self, key, value):
+        self._configs[key] = value
+
+    def get_config(self, key):
+        return self._configs.get(key)
+
     def _read_session(self):
-        if os.path.exists(LeetCodeSession._SESSION_FILE):
-            with open(LeetCodeSession._SESSION_FILE, 'r') as inf:
-                d = json.load(inf)
-                self._endpoint = d['endpoint']
-                self._csrftoken = d['csrftoken']
-                self._leetcode_session = d['leetcode_session']
+        if os.path.exists(LeetcodeSession._SESSION_FILE):
+            with open(LeetcodeSession._SESSION_FILE, 'r') as inf:
+                jo = json.load(inf)
+                self._endpoint = jo['endpoint']
+                self._csrftoken = jo['csrftoken']
+                self._leetcode_session = jo['leetcode_session']
 
     def is_logged_in(self):
         # todo
@@ -153,12 +168,12 @@ class LeetCodeSession:
     def login(self, endpoint, csrftoken, leetcode_session):
         f = get_path(LC_SESSION)
         with open(f, 'w') as outf:
-            d = {
+            jo = {
                 'endpoint': endpoint,
                 'csrftoken': csrftoken,
                 'leetcode_session': leetcode_session
             }
-            json.dump(d, outf)
+            json.dump(jo, outf)
         self._endpoint = endpoint
         self._csrftoken = csrftoken
         self._leetcode_session = leetcode_session
@@ -178,11 +193,14 @@ class LeetCodeSession:
             jo = json.loads(resp_text)
 
         problems = jo['stat_status_pairs']
-        return list(
-            map(lambda x: problem_repr_full(x['stat']['frontend_question_id'],
-                                            x['stat']['question__title_slug'].strip(),
-                                            x['stat']['question__title'].strip()),
-                sorted(problems, key=lambda x: x['stat']['frontend_question_id'])))
+        tmpf = get_path(LC_PROBLEMS_TMP)
+        lines = list(map(lambda x: problem_repr_full(x['stat']['frontend_question_id'],
+                                                     x['stat']['question__title_slug'].strip(),
+                                                     x['stat']['question__title'].strip()),
+                         sorted(problems, key=lambda x: x['stat']['frontend_question_id'])))
+        with open(tmpf, 'w') as outf:
+            outf.write('\n'.join(lines))
+        return tmpf, 'All problems loaded!'
 
     def _get_problem(self, problem_id, title, use_cache=True):
         f = get_path(LC_PROBLEMS_HOME) + problem_repr_compact(problem_id, title) + '.json'
@@ -201,34 +219,76 @@ class LeetCodeSession:
             + problem_repr_compact(problem_id, title) \
             + EXTENSIONS[lang]
         if use_cache and os.path.exists(f):
-            return f
+            return f, 'Happy coding! ^_^'
         init_lang_dir(lang)
-        d = self._get_problem(problem_id, title)
-        lines = d['data']['question']['content'].split('\n')
+        jo = self._get_problem(problem_id, title)
+        lines = jo['data']['question']['content'].split('\n')
         comment = COMMENTS[lang]
         lines.insert(0, '@desc-start')
         lines.append('@desc-end')
         lines = list(map(lambda x: comment + ' ' + x, lines))
-        code_data = filter(lambda x: x['langSlug'] == lang, d['data']['question']['codeSnippets'])
+        code_data = filter(lambda x: x['langSlug'] == lang, jo['data']['question']['codeSnippets'])
         code_lines = ['', '', comment + ' @code-start'] + list(list(code_data)[0]['code'].split('\n'))
         code_lines.append(comment + ' @code-end')
         with open(f, 'w') as outf:
             outf.write('\n'.join(lines + code_lines))
-        return f
+        return f, 'Happy coding! ^_^'
 
-    def _cut_codes(self, code_lines):
-        return code_lines[code_lines.index('@code-start') + 1: code_lines.index('@code-end')]
+    @staticmethod
+    def _cut_codes(code_lines):
+        start_index = LeetcodeSession._find_index(code_lines, '@code-start')
+        end_index = LeetcodeSession._find_index(code_lines, '@code-end')
+        return code_lines[start_index + 1: end_index]
 
-    def test(self, code_file_name, testcases):
-        lang = find_lang_by_extension('.', code_file_name.split('.')[1])
-        problem_id, title = extract_problem_id_and_title(code_file_name)
-        f = get_path(LC_SOLUTIONS_HOME) + lang + code_file_name
+    @staticmethod
+    def _find_index(code_lines, delimiter):
+        for i in range(len(code_lines)):
+            if delimiter in code_lines[i]:
+                return i
+
+    @staticmethod
+    def _build_run_code_output(d, testcases):
+        run_success = d['run_success']
+        if run_success:
+            correct = d['correct_answer']
+            if correct:
+                return ('Correct\nInput:\n%s\nExpected Output:\n%s\nOutput:\n%s'
+                        % (testcases, d['expected_code_answer'], d['code_answer']))
+            else:
+                return ('Wrong Answer\nInput:\n%s\nExpected Output:\n%s\nOutput:\n%s'
+                        % (testcases, d['expected_code_answer'], d['code_answer'],))
+        else:
+            return '%s\n%s' % (d['status_msg'], d['full_compile_error'])
+
+    def test(self, problem_id, title, lang, testcases):
+        f = get_path(LC_SOLUTIONS_HOME) + lang + '/' \
+            + problem_repr_compact(problem_id, title) \
+            + EXTENSIONS[lang]
         if not testcases:
-            d = self._get_problem(problem_id, title)
-            testcases = d['data']['question']['sampleTestCase']
+            jo = self._get_problem(problem_id, title)
+            testcases = jo['data']['question']['sampleTestCase']
         with open(f, 'r') as inf:
-            code_lines = inf.readlines().split('\n')
-        d = self._api.test(problem_id, title, lang, self._cut_codes(code_lines), testcases)
+            code_lines = inf.readlines()
+        jo = self._api.test(problem_id, title, lang, code_lines, testcases)
+        return self._build_run_code_output(jo, testcases)
+
+    def get_last_submission(self, problem_id, title, lang):
+        f, _ = self.get_problem_code(problem_id, title, lang, True)
+        with open(f, 'r') as inf:
+            code_lines = inf.readlines()
+            code_lines = list(map(lambda x: x.strip(), code_lines))
+        try:
+            jo = self._api.get_last_submission(problem_id, title, lang)
+            remote_lines = jo['code'].split('\n')
+            start_index = self._find_index(code_lines, '@code-start')
+            end_index = self._find_index(code_lines, '@code-end')
+            final_lines = code_lines[:start_index + 1] + remote_lines + code_lines[end_index:]
+            with open(f, 'w') as outf:
+                outf.write('\n'.join(final_lines))
+        except RuntimeError:
+            return f, 'No code found!'
+        else:
+            return f, 'Latest submission is retrieved!'
 
     def submit(self, code_file_name):
         pass
@@ -267,22 +327,26 @@ class _LeetCodeApi:
             'x-csrftoken': self._csrftoken
         }
 
-    def _do_get(self, url, headers, status_code=200):
-        resp = requests.get(url, headers=headers)
+    @staticmethod
+    def _do_get(url, headers, params=None, status_code=200):
+        if params is None:
+            params = {}
+        resp = requests.get(url, headers=headers, params=params)
         return _LeetCodeApi.check_resp(resp, status_code)
 
-    def _do_post(self, url, headers, form_data, status_code=200):
+    @staticmethod
+    def _do_post(url, headers, form_data, status_code=200):
         resp = requests.post(url, headers=headers, json=form_data)
         return _LeetCodeApi.check_resp(resp, status_code)
 
     def get_progress_all(self):
         url = self._url('progress_all')
-        resp = self._do_get(url, headers=self._build_headers())
+        resp = _LeetCodeApi._do_get(url, headers=self._build_headers())
         return resp.text
 
     def get_problems(self, category):
         url = self._url('problems', category)
-        resp = self._do_get(url, headers=self._build_headers())
+        resp = _LeetCodeApi._do_get(url, headers=self._build_headers())
         return resp.text
 
     def get_problem(self, title):
@@ -328,16 +392,16 @@ class _LeetCodeApi:
             'judge_type': 'large',
             'lang': lang,
             'question_id': question_id,
-            'typed_code': '\n'.join(self._cut_codes(code_lines))
+            'typed_code': '\n'.join(LeetcodeSession._cut_codes(code_lines))
         })
-        d = resp.json()
-        interpret_id = d['interpret_id']
-        url = urls['run_check'] % interpret_id
+        jo = resp.json()
+        interpret_id = jo['interpret_id']
+        url = self._url('run_check', interpret_id)
         total_rounds = 30  # 30 seconds
         round_index = 0
         final_resp_json = None
         while round_index < total_rounds:
-            resp = do_get(url, headers=build_headers())
+            resp = _LeetCodeApi._do_get(url, headers=self._build_headers())
             resp_json = resp.json()
             if resp_json['state'] != 'PENDING':
                 final_resp_json = resp.json()
@@ -346,15 +410,35 @@ class _LeetCodeApi:
             round_index += 1
         return final_resp_json
 
+    def get_last_submission(self, problem_id, title, lang):
+        url = self._url('latest_submission')
+        resp = _LeetCodeApi._do_get(url, headers={
+            **self._build_headers(),
+            'Referer': self._url('referer', title)
+        }, params={
+            'qid': problem_id,
+            'lang': lang
+        })
+        return resp.json()
+
 
 @neovim.plugin
 class LeetcodePlugin(object):
     def __init__(self, vim):
         self.vim = vim
-        self.session = LeetCodeSession()
+        lang = self.vim.eval('g:leetcode_default_lang')
+        self.session = LeetcodeSession()
+        self.session.set_config('default_lang', lang)
 
     def _echo(self, message):
         self.vim.command('echo "' + message + '"')
+
+    @staticmethod
+    def _extract_problem_data(line1, line2):
+        problem_id, title, ext = extract_problem_data(line1)
+        if not problem_id and not title:
+            problem_id, title, ext = extract_problem_data(line2)
+        return problem_id, title, ext
 
     @neovim.function('LCLoginWithCookie')
     def lc_login_with_cookie(self, args):
@@ -378,65 +462,112 @@ class LeetcodePlugin(object):
                 else:
                     use_cache = False
             self._echo('Loading problems...')
-            lines = self.session.get_problems(category, use_cache)
-
-            buf = self.vim.current.buffer
-            if buf.name.strip() != '' or ''.join(buf[:]).strip() != '':
-                self.vim.command('new')
-            self.vim.current.buffer[:] = lines
+            f, msg = self.session.get_problems(category, use_cache)
+            self.vim.command('e ' + f)
             self.vim.command('set nomodifiable')
             # self.vim.current.buffer.add_highlight('String', 1, 0, -1, -1)
-            self._echo('All problems loaded!')
+            self._echo(msg)
         else:
             self._echo('Login with browser cookie first!')
 
     @neovim.function('LCCoding')
     def lc_coding(self, args):
         if self.session.is_logged_in():
-            lang = default_lang
-            use_cache = True
-            if len(args) == 1:
-                lang = args[0].lower()
-            elif len(args) == 2:
-                lang = args[0].lower()
-                use_cache = args[1].lower() == 'true'
+            buf_name = self.vim.current.buffer.name
+            buf_name = buf_name.split('/')[-1]
             current_line = self.vim.current.line
-            if current_line:
-                problem_id, title = extract_problem_id_and_title(current_line)
-                f = self.session.get_problem_code(problem_id, title, lang, use_cache)
+            lang = None
+            problem_id, title, ext = LeetcodePlugin._extract_problem_data(current_line, buf_name)
+            if ext:
+                lang = find_lang_by_extension(ext)
+            if problem_id and title:
+                if len(args) > 0:
+                    lang = args[0].lower()
+                if not lang:
+                    lang = self.session.get_config('default_lang')
+                f, msg = self.session.get_problem_code(problem_id, title, lang, True)
                 if f:
                     self.vim.command('e ' + f)
                     self.vim.command('set modifiable')
                     # self.vim.current.buffer.append('// @code-start', 0)
-                    self._echo('Happy coding! ^_^')
+                    self._echo(msg)
                 else:
                     self._echo('No code snippet for ' + lang + ' found!')
             else:
-                self._echo('You should get problem list first and select one!')
+                self._echo('No enough information provided!')
         else:
             self._echo('Login with browser cookie first!')
 
+    @neovim.function('LCCodingReset')
+    def lc_coding_reset(self, args):
+        if self.session.is_logged_in():
+            buf_name = self.vim.current.buffer.name
+            buf_name = buf_name.split('/')[-1]
+            problem_id, title, ext = extract_problem_data(buf_name)
+            lang = find_lang_by_extension(ext)
+            if problem_id and title and lang:
+                f, msg = self.session.get_problem_code(problem_id, title, lang, False)
+                if f:
+                    self.vim.command('e ' + f)
+                    self.vim.command('set modifiable')
+                    self._echo(msg)
+            else:
+                self._echo('Only the opened solution file can be reset!')
+
     @neovim.function('LCTest')
     def lc_run(self, args):
-        buf_name = self.vim.current.buffer.name.strip()
-        code_lines = self.vim.current.buffer[:]
-        if buf_name:
+        if self.session.is_logged_in():
+            buf_name = self.vim.current.buffer.name.strip()
             buf_name = buf_name.split('/')[-1]
-            qid = buf_name.split('-')[1]
-            title_slug = re.sub('^no-\\d+-', '', buf_name.split('/')[-1].split('.')[0])
-            _, ext = buf_name.split('.')
-            lang = find_lang_by_extension(ext)
-            if title_slug and lang:
-                d = self.session.run(qid, title_slug, lang, code_lines)
-                if d['run_success']:
-                    self._echo('Congrats!')
-                else:
-                    self._echo(d['status_msg'] + '\n' + d['full_compile_error'])
+            if len(args) > 0:
+                testcases = args[0]
             else:
-                self._echo('Not a valid solution leetcodenvim code file.')
+                testcases = None
+            lang = None
+            problem_id, title, ext = extract_problem_data(buf_name)
+            if ext:
+                lang = find_lang_by_extension(ext)
+            if problem_id and title and lang:
+                result_msg = self.session.test(problem_id, title, lang, testcases)
+                self._echo(result_msg)
+            else:
+                self._echo('Not a valid solution file!')
         else:
-            self._echo('Not a valid solution leetcodenvim code file.')
+            self._echo('Login with browser cookie first!')
 
-# session = LeetCodeSession()
+    @neovim.function("LCGetLatestSubmission")
+    def lc_get_latest_submission(self, args):
+        if self.session.is_logged_in():
+            buf_name = self.vim.current.buffer.name
+            buf_name = buf_name.split('/')[-1]
+            current_line = self.vim.current.line
+            lang = None
+            problem_id, title, ext = LeetcodePlugin._extract_problem_data(buf_name, current_line)
+            if ext:
+                lang = find_lang_by_extension(ext)
+            if problem_id and title:
+                if len(args) > 0:
+                    lang = args[0].lower()
+                if not lang:
+                    lang = self.session.get_config('default_lang')
+                f, msg = self.session.get_last_submission(problem_id, title, lang)
+                if f:
+                    self.vim.command('e ' + f)
+                    self.vim.command('set modifiable')
+                    # self.vim.current.buffer.append('// @code-start', 0)
+                    self._echo(msg)
+        else:
+            self._echo('Login with browser cookie first!')
+
+# a, b, c = extract_problem_data('no-1-two-sum.c')
+# print()
+
+# session = LeetcodeSession()
 # d = session.get_problem_code(1, 'two-sum', 'c')
+# d = session.test(1, 'two-sum', 'c', '[2,7,11,15]\n9')
+# d = session.get_last_submission(1, 'two-sum', 'java')
 # print(d)
+
+# buf_name = 'no-1-two-sum.java'
+# problem_id, title, lang = LeetcodePlugin._extract_problem_data(buf_name, 'abdfesg')
+# print()
