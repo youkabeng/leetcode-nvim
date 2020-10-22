@@ -52,5 +52,22 @@ call LCCoding()
 call LCTest()
 ```
 
+5. Retrieve latest submission
+
+```
+call LCGetLatestSubmission()
+```
+
+6. Reset code
+
+```
+call LCCodingReset()
+```
+
+7. Submit
+```
+call LCSubmit()
+```
+
 
 

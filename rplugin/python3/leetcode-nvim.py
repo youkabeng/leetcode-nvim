@@ -40,7 +40,8 @@ URLS = {
     'referer': 'https://%s/problems/%s/',
     'run': 'https://%s/problems/%s/interpret_solution/',
     'run_check': 'https://%s/submissions/detail/%s/check/',
-    'latest_submission': 'https://%s/submissions/latest/'
+    'latest_submission': 'https://%s/submissions/latest/',
+    'submit': 'https://%s/problems/%s/submit/'
 }
 
 EXTENSIONS = {
@@ -144,7 +145,7 @@ class LeetcodeSession:
         self._leetcode_session = None
         self._read_session()
         if self.is_logged_in():
-            self._api = _LeetCodeApi(self._endpoint, self._csrftoken, self._leetcode_session)
+            self._api = _LeetcodeApi(self._endpoint, self._csrftoken, self._leetcode_session)
 
     def set_config(self, key, value):
         self._configs[key] = value
@@ -153,8 +154,8 @@ class LeetcodeSession:
         return self._configs.get(key)
 
     def _read_session(self):
-        if os.path.exists(LeetcodeSession._SESSION_FILE):
-            with open(LeetcodeSession._SESSION_FILE, 'r') as inf:
+        if os.path.exists(self._SESSION_FILE):
+            with open(self._SESSION_FILE, 'r') as inf:
                 jo = json.load(inf)
                 self._endpoint = jo['endpoint']
                 self._csrftoken = jo['csrftoken']
@@ -247,7 +248,7 @@ class LeetcodeSession:
                 return i
 
     @staticmethod
-    def _build_run_code_output(d, testcases):
+    def _build_test_code_output(d, testcases):
         run_success = d['run_success']
         if run_success:
             correct = d['correct_answer']
@@ -257,6 +258,21 @@ class LeetcodeSession:
             else:
                 return ('Wrong Answer\nInput:\n%s\nExpected Output:\n%s\nOutput:\n%s'
                         % (testcases, d['expected_code_answer'], d['code_answer'],))
+        else:
+            return '%s\n%s' % (d['status_msg'], d['full_compile_error'])
+
+    @staticmethod
+    def _build_submit_code_output(d):
+        run_success = d['run_success']
+        if run_success:
+            all_pass = d['total_correct'] == d['total_testcases']
+            if all_pass:
+                return ('Accepted\nTestcases:\n%d/%d\nRuntime Percentile:\n%s\nMemory Percentile:\n%s'
+                        % (d['total_correct'], d['total_testcases'], d['runtime_percentile'], d['memory_percentile']))
+            else:
+                return ('Wrong Answer\nTestcases:\n%d/%d\nInput:\n%s\nExpected Output:\n%s\nOutput:\n%s'
+                        % (d['total_correct'], d['total_testcases'], d['input_formatted'], d['expected_output'],
+                           d['code_output']))
         else:
             return '%s\n%s' % (d['status_msg'], d['full_compile_error'])
 
@@ -270,13 +286,22 @@ class LeetcodeSession:
         with open(f, 'r') as inf:
             code_lines = inf.readlines()
         jo = self._api.test(problem_id, title, lang, code_lines, testcases)
-        return self._build_run_code_output(jo, testcases)
+        return self._build_test_code_output(jo, testcases)
+
+    def submit(self, problem_id, title, lang):
+        f = get_path(LC_SOLUTIONS_HOME) + lang + '/' \
+            + problem_repr_compact(problem_id, title) \
+            + EXTENSIONS[lang]
+        with open(f, 'r') as inf:
+            code_lines = inf.readlines()
+        jo = self._api.submit(problem_id, title, lang, self._cut_codes(code_lines))
+        return self._build_submit_code_output(jo)
 
     def get_last_submission(self, problem_id, title, lang):
         f, _ = self.get_problem_code(problem_id, title, lang, True)
         with open(f, 'r') as inf:
             code_lines = inf.readlines()
-            code_lines = list(map(lambda x: x.strip(), code_lines))
+            code_lines = list(map(lambda x: x.rstrip(), code_lines))
         try:
             jo = self._api.get_last_submission(problem_id, title, lang)
             remote_lines = jo['code'].split('\n')
@@ -290,11 +315,8 @@ class LeetcodeSession:
         else:
             return f, 'Latest submission is retrieved!'
 
-    def submit(self, code_file_name):
-        pass
 
-
-class _LeetCodeApi:
+class _LeetcodeApi:
 
     def __init__(self, endpoint, csrftoken, leetcode_session):
         self._endpoint = endpoint
@@ -332,21 +354,21 @@ class _LeetCodeApi:
         if params is None:
             params = {}
         resp = requests.get(url, headers=headers, params=params)
-        return _LeetCodeApi.check_resp(resp, status_code)
+        return _LeetcodeApi.check_resp(resp, status_code)
 
     @staticmethod
     def _do_post(url, headers, form_data, status_code=200):
         resp = requests.post(url, headers=headers, json=form_data)
-        return _LeetCodeApi.check_resp(resp, status_code)
+        return _LeetcodeApi.check_resp(resp, status_code)
 
     def get_progress_all(self):
         url = self._url('progress_all')
-        resp = _LeetCodeApi._do_get(url, headers=self._build_headers())
+        resp = _LeetcodeApi._do_get(url, headers=self._build_headers())
         return resp.text
 
     def get_problems(self, category):
         url = self._url('problems', category)
-        resp = _LeetCodeApi._do_get(url, headers=self._build_headers())
+        resp = _LeetcodeApi._do_get(url, headers=self._build_headers())
         return resp.text
 
     def get_problem(self, title):
@@ -382,26 +404,20 @@ class _LeetCodeApi:
         })
         return resp.text
 
-    def test(self, question_id, title, lang, code_lines, testcases):
-        url = self._url('run', title)
+    def _upload_code(self, url_name, run_id_name, title, form_data):
+        url = self._url(url_name, title)
         resp = self._do_post(url, headers={
             **self._build_headers(),
             'Referer': self._url('referer', title)
-        }, form_data={
-            'data_input': testcases,
-            'judge_type': 'large',
-            'lang': lang,
-            'question_id': question_id,
-            'typed_code': '\n'.join(LeetcodeSession._cut_codes(code_lines))
-        })
+        }, form_data=form_data)
         jo = resp.json()
-        interpret_id = jo['interpret_id']
-        url = self._url('run_check', interpret_id)
+        run_id = jo[run_id_name]
+        url = self._url('run_check', run_id)
         total_rounds = 30  # 30 seconds
         round_index = 0
         final_resp_json = None
         while round_index < total_rounds:
-            resp = _LeetCodeApi._do_get(url, headers=self._build_headers())
+            resp = _LeetcodeApi._do_get(url, headers=self._build_headers())
             resp_json = resp.json()
             if resp_json['state'] != 'PENDING':
                 final_resp_json = resp.json()
@@ -410,9 +426,25 @@ class _LeetCodeApi:
             round_index += 1
         return final_resp_json
 
+    def test(self, problem_id, title, lang, code_lines, testcases):
+        return self._upload_code('run', 'interpret_id', title, form_data={
+            'data_input': testcases,
+            'judge_type': 'large',
+            'lang': lang,
+            'question_id': problem_id,
+            'typed_code': '\n'.join(code_lines)
+        })
+
+    def submit(self, problem_id, title, lang, code_lines):
+        return self._upload_code('submit', 'submission_id', title, form_data={
+            'lang': lang,
+            'question_id': problem_id,
+            'typed_code': '\n'.join(code_lines)
+        })
+
     def get_last_submission(self, problem_id, title, lang):
         url = self._url('latest_submission')
-        resp = _LeetCodeApi._do_get(url, headers={
+        resp = _LeetcodeApi._do_get(url, headers={
             **self._build_headers(),
             'Referer': self._url('referer', title)
         }, params={
@@ -517,7 +549,7 @@ class LeetcodePlugin(object):
     @neovim.function('LCTest')
     def lc_run(self, args):
         if self.session.is_logged_in():
-            buf_name = self.vim.current.buffer.name.strip()
+            buf_name = self.vim.current.buffer.name
             buf_name = buf_name.split('/')[-1]
             if len(args) > 0:
                 testcases = args[0]
@@ -529,6 +561,23 @@ class LeetcodePlugin(object):
                 lang = find_lang_by_extension(ext)
             if problem_id and title and lang:
                 result_msg = self.session.test(problem_id, title, lang, testcases)
+                self._echo(result_msg)
+            else:
+                self._echo('Not a valid solution file!')
+        else:
+            self._echo('Login with browser cookie first!')
+
+    @neovim.function('LCSubmit')
+    def lc_submit(self, args):
+        if self.session.is_logged_in():
+            buf_name = self.vim.current.buffer.name.strip()
+            buf_name = buf_name.split('/')[-1]
+            lang = None
+            problem_id, title, ext = extract_problem_data(buf_name)
+            if ext:
+                lang = find_lang_by_extension(ext)
+            if problem_id and title and lang:
+                result_msg = self.session.submit(problem_id, title, lang)
                 self._echo(result_msg)
             else:
                 self._echo('Not a valid solution file!')
@@ -559,15 +608,11 @@ class LeetcodePlugin(object):
         else:
             self._echo('Login with browser cookie first!')
 
-# a, b, c = extract_problem_data('no-1-two-sum.c')
-# print()
-
-# session = LeetcodeSession()
-# d = session.get_problem_code(1, 'two-sum', 'c')
-# d = session.test(1, 'two-sum', 'c', '[2,7,11,15]\n9')
-# d = session.get_last_submission(1, 'two-sum', 'java')
+# s = LeetcodeSession()
+# d = s.get_last_submission(1, 'two-sum', 'java')
 # print(d)
-
-# buf_name = 'no-1-two-sum.java'
-# problem_id, title, lang = LeetcodePlugin._extract_problem_data(buf_name, 'abdfesg')
-# print()
+#
+# pid, title, ext = extract_problem_data('no-1-two-sum.java')
+#
+# d = s.test(1, 'two-sum', 'java', '[2,7,11,15]\n9')
+# print(d)
