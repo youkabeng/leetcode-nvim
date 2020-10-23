@@ -1,5 +1,7 @@
 # Leetcode-Nvim Conquer the Leetcode problems in nvim
 
+![Leetcode in vim](demo.gif)
+
 ## <a id="introduction"></a>Introduction
 
 This a very simple plugin that makes you can write leetcode solutions in your beloved nvim editor.
