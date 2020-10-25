@@ -1,6 +1,6 @@
 # Leetcode-Nvim Conquer the Leetcode problems in nvim
 
-![Leetcode in vim](demo.gif)
+![Leetcode in vim](https://github.com/youkabeng/leetcode-nvim/raw/master/demo.gif)
 
 ## <a id="introduction"></a>Introduction
 
