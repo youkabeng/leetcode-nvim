@@ -26,7 +26,7 @@ LC_PROBLEM_REPR_COMPACT = 'no-%d-%s'
 REGEXP_LINE = 'No\\. (\\d) .* <([A-Za-z0-9\\-]*)>'
 REGEXP_LINE_COMAPCT = 'no-(\\d)-(.+)\\.([a-z]+)'
 
-LC_ENDPOINT_CN = "leetcode.cn"
+LC_ENDPOINT_CN = "leetcode-cn.com"
 LC_ENDPOINT_US = "leetcode.com"
 
 URLS = {
@@ -90,10 +90,14 @@ class LeetcodeSession:
         self._endpoint = None
         self._csrftoken = None
         self._leetcode_session = None
+        self._api = None
         self._init_leetcode_home()
         self._read_session()
         if self.is_logged_in():
-            self._api = _LeetcodeApi(self._endpoint, self._csrftoken, self._leetcode_session)
+            self._init_api()
+
+    def _init_api(self):
+        self._api = _LeetcodeApi(self._endpoint, self._csrftoken, self._leetcode_session)
 
     def _get_path(self, path):
         return self._get_user_home() + path
@@ -120,7 +124,7 @@ class LeetcodeSession:
 
     @staticmethod
     def _problem_repr_full(problem_id, title, title_full):
-        return LC_PROBLEM_REPR_FULL % (problem_id, title_full, title)
+        return LC_PROBLEM_REPR_FULL % (int(problem_id), title_full, title)
 
     def set_config(self, key, value):
         self._configs[key] = value
@@ -154,6 +158,7 @@ class LeetcodeSession:
         self._endpoint = endpoint
         self._csrftoken = csrftoken
         self._leetcode_session = leetcode_session
+        self._init_api()
 
     def is_premium(self):
         pass
@@ -171,10 +176,10 @@ class LeetcodeSession:
 
         problems = jo['stat_status_pairs']
         tmpf = self._get_path(LC_PROBLEMS_TMP)
-        lines = list(map(lambda x: self._problem_repr_full(x['stat']['frontend_question_id'],
+        lines = list(map(lambda x: self._problem_repr_full(x['stat']['question_id'],
                                                            x['stat']['question__title_slug'].strip(),
                                                            x['stat']['question__title'].strip()),
-                         sorted(problems, key=lambda x: x['stat']['frontend_question_id'])))
+                         sorted(problems, key=lambda x: x['stat']['question_id'])))
         with open(tmpf, 'w') as outf:
             outf.write('\n'.join(lines))
         return tmpf, 'All problems loaded!'
@@ -325,7 +330,7 @@ class _LeetcodeApi:
 
     def _build_headers(self):
         return {
-            'Host': 'leetcode.com',
+            'Host': self._host(),
             'Cookie': self._build_cookie_string(),
             'x-csrftoken': self._csrftoken
         }

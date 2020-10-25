@@ -28,7 +28,7 @@ After that, run "UpdateRemotePlugins" command once in nvim.
 
 ## <a id="usage"></a>Usage
 
-1. First use browser cookie to log in.
+1. First use browser cookie to log in. Only 'us' is supported for now.
 
 Copy "csrftoken" and "leetcode_session"
 
