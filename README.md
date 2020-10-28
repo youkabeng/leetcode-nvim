@@ -26,6 +26,35 @@ After that, run "UpdateRemotePlugins" command once in nvim.
 :UpdateRemotePlugins
 ```
 
+## <a if="config"></a>Config
+
+Set default lang in your vim config file
+
+```
+let g:leetcode_default_lang = 'c'
+```
+
+Available languages are as follows:
+
+|Language|Abbreviation|
+|--------|------------|
+|C++|cpp|
+|Java|java|
+|Python 2|python|
+|Python 3|python3|
+|C|c|
+|C#|csharp|
+|Javascript|javascript|
+|Ruby|ruby|
+|Swift|swift|
+|Go|golang|
+|Scala|scala|
+|Kotlin|kotlin|
+|Rust|rust|
+|PHP|php|
+|Typescript|typescript|
+
+
 ## <a id="usage"></a>Usage
 
 1. First use browser cookie to log in. Only 'us' is supported for now.
