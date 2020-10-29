@@ -9,9 +9,9 @@ Login with browser cookies and happy coding.
 
 ## <a id="installing"></a>Installing
 
-This plugin is written in python3 and you need to install requests.
+This plugin is written in python3 and you need to install requests and beautifulsoup4.
 ```
-pip install requests
+pip install requests beautifulsoup4
 ```
 
 Use Plug-Vim

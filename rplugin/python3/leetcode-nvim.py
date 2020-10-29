@@ -5,6 +5,7 @@ import re
 import neovim
 import requests
 import time
+from bs4 import BeautifulSoup
 
 LC_HOME = '.leetcode-nvim/'
 LC_CONFIG = LC_HOME + 'config.json'
@@ -23,8 +24,8 @@ LC_PROBLEM_CONCURRENCY = 'concurrency'
 LC_PROBLEM_REPR_FULL = 'No. %d %s <%s>'
 LC_PROBLEM_REPR_COMPACT = 'no-%d-%s'
 
-REGEXP_LINE = 'No\\. (\\d) .* <([A-Za-z0-9\\-]*)>'
-REGEXP_LINE_COMAPCT = 'no-(\\d)-(.+)\\.([a-z]+)'
+REGEXP_LINE = 'No\\. (\\d+) .* <([A-Za-z0-9\\-]*)>'
+REGEXP_LINE_COMAPCT = 'no-(\\d+)-(.+)\\.([a-z]+)'
 
 LC_ENDPOINT_CN = "leetcode-cn.com"
 LC_ENDPOINT_US = "leetcode.com"
@@ -204,7 +205,7 @@ class LeetcodeSession:
             return f, 'Happy coding! ^_^'
         self._init_lang_dir(lang)
         jo = self._get_problem(problem_id, title)
-        lines = jo['data']['question']['content'].split('\n')
+        lines = self._html2text(jo['data']['question']['content']).split('\n')
         comment = COMMENTS[lang]
         lines.insert(0, '@desc-start')
         lines.append('@desc-end')
@@ -300,6 +301,10 @@ class LeetcodeSession:
             return f, 'No code found!'
         else:
             return f, 'Latest submission is retrieved!'
+
+    def _html2text(self, html):
+        soup = BeautifulSoup(html, 'html.parser')
+        return soup.text
 
 
 class _LeetcodeApi:
