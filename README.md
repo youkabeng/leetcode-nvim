@@ -54,6 +54,13 @@ Available languages are as follows:
 |PHP|php|
 |Typescript|typescript|
 
+(Optional) Give a repo path(absolute path only), every accepted solution will be copied to the repo.    
+You can use github to keep track of your progress.
+
+```
+let g:leetcode_repo_path = '/your/repo/path'
+```
+
 
 ## <a id="usage"></a>Usage
 

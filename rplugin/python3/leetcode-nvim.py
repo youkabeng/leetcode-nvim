@@ -1,6 +1,9 @@
 import json
 import os
+import pathlib
 import re
+import shutil
+import subprocess
 
 import neovim
 import requests
@@ -21,8 +24,8 @@ LC_PROBLEM_DATABASE = 'database'
 LC_PROBLEM_SHELL = 'shell'
 LC_PROBLEM_CONCURRENCY = 'concurrency'
 
-LC_PROBLEM_REPR_FULL = 'No. %d %s <%s>'
-LC_PROBLEM_REPR_COMPACT = 'no-%d-%s'
+LC_PROBLEM_REPR_FULL = 'No. %04d %s <%s>'
+LC_PROBLEM_REPR_COMPACT = 'no-%04d-%s'
 
 REGEXP_LINE = 'No\\. (\\d+) .* <([A-Za-z0-9\\-]*)>'
 REGEXP_LINE_COMAPCT = 'no-(\\d+)-(.+)\\.([a-z]+)'
@@ -84,36 +87,60 @@ COMMENTS = {
 
 class LeetcodeSession:
 
-    def __init__(self):
+    def __init__(self, configs):
         self._configs = {
-            'default_lang': 'c'
+            'default_lang': 'java',
+            **configs
         }
         self._endpoint = None
         self._csrftoken = None
         self._leetcode_session = None
         self._api = None
+        self._repo_dir = None
+        self._repo_solution_dir = None
         self._init_leetcode_home()
         self._read_session()
         if self.is_logged_in():
             self._init_api()
+        if self.has_repo_path():
+            self._init_repo()
 
     def _init_api(self):
         self._api = _LeetcodeApi(self._endpoint, self._csrftoken, self._leetcode_session)
+
+    def _init_repo(self):
+        repo_path = self._configs['repo_path']
+
+        if repo_path.endswith('.git'):
+            repo_dir = repo_path[0: -4]
+        else:
+            repo_dir = repo_path
+
+        if not pathlib.Path(repo_dir).exists():
+            pathlib.Path(repo_dir).mkdir(parents=True, exist_ok=True)
+
+        if not pathlib.Path(repo_dir + '.git').exists():
+            subprocess.run(['git', 'init', repo_dir], check=True, capture_output=True)
+
+        self._repo_dir = repo_dir
+        self._repo_solution_dir = repo_dir + 'solutions/'
+        if not pathlib.Path(self._repo_solution_dir).exists():
+            pathlib.Path(self._repo_solution_dir).mkdir(parents=True, exist_ok=True)
 
     def _get_path(self, path):
         return self._get_user_home() + path
 
     def _init_leetcode_home(self):
         leetcode_home = self._get_path(LC_HOME)
-        if not os.path.exists(leetcode_home):
-            os.mkdir(leetcode_home)
-            os.mkdir(self._get_path(LC_PROBLEMS_HOME))
-            os.mkdir(self._get_path(LC_SOLUTIONS_HOME))
+        if not pathlib.Path(leetcode_home).exists():
+            pathlib.Path(leetcode_home).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(self._get_path(LC_PROBLEMS_HOME)).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(self._get_path(LC_SOLUTIONS_HOME)).mkdir(parents=True, exist_ok=True)
 
-    def _init_lang_dir(self, lang):
-        lang_dir_path = self._get_path(LC_SOLUTIONS_HOME) + lang
-        if not os.path.exists(lang_dir_path):
-            os.mkdir(lang_dir_path)
+    def _init_lang_dir(self, lang, path):
+        lang_dir_path = path + lang
+        if not pathlib.Path(lang_dir_path).exists():
+            pathlib.Path(lang_dir_path).mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _get_user_home():
@@ -127,11 +154,11 @@ class LeetcodeSession:
     def _problem_repr_full(problem_id, title, title_full):
         return LC_PROBLEM_REPR_FULL % (int(problem_id), title_full, title)
 
-    def set_config(self, key, value):
-        self._configs[key] = value
-
     def get_config(self, key):
         return self._configs.get(key)
+
+    def has_repo_path(self):
+        return self.get_config('repo_path') is not None
 
     def _read_session(self):
         f = self._get_path(LC_SESSION)
@@ -203,7 +230,7 @@ class LeetcodeSession:
             + EXTENSIONS[lang]
         if use_cache and os.path.exists(f):
             return f, 'Happy coding! ^_^'
-        self._init_lang_dir(lang)
+        self._init_lang_dir(lang, path=self._get_path(LC_SOLUTIONS_HOME))
         jo = self._get_problem(problem_id, title)
         lines = self._html2text(jo['data']['question']['content']).split('\n')
         comment = COMMENTS[lang]
@@ -271,17 +298,21 @@ class LeetcodeSession:
             testcases = jo['data']['question']['sampleTestCase']
         with open(f, 'r') as inf:
             code_lines = inf.readlines()
-        jo = self._api.test(problem_id, title, lang, code_lines, testcases)
+        jo = self._api.test(problem_id, title, lang, self._cut_codes(code_lines), testcases)
         return self._build_test_code_output(jo, testcases)
 
     def submit(self, problem_id, title, lang):
-        f = self._get_path(LC_SOLUTIONS_HOME) + lang + '/' \
-            + self._problem_repr_compact(problem_id, title) \
-            + EXTENSIONS[lang]
-        with open(f, 'r') as inf:
+        fn = self._problem_repr_compact(problem_id, title) + EXTENSIONS[lang]
+        fp = self._get_path(LC_SOLUTIONS_HOME) + lang + '/' + fn
+        with open(fp, 'r') as inf:
             code_lines = inf.readlines()
             code_lines = list(map(lambda x: x.rstrip(), code_lines))
         jo = self._api.submit(problem_id, title, lang, self._cut_codes(code_lines))
+        if jo.get('run_success') is not None \
+                and jo['total_correct'] == jo['total_testcases'] \
+                and self.has_repo_path():
+            self._init_lang_dir(lang, self._repo_solution_dir)
+            shutil.copyfile(fp, self._repo_solution_dir + lang + '/' + fn)
         return self._build_submit_code_output(jo)
 
     def get_last_submission(self, problem_id, title, lang):
@@ -302,7 +333,8 @@ class LeetcodeSession:
         else:
             return f, 'Latest submission is retrieved!'
 
-    def _html2text(self, html):
+    @staticmethod
+    def _html2text(html):
         soup = BeautifulSoup(html, 'html.parser')
         return soup.text
 
@@ -449,11 +481,29 @@ class _LeetcodeApi:
 class LeetcodePlugin(object):
     def __init__(self, vim):
         self.vim = vim
-        lang = self.vim.eval('g:leetcode_default_lang')
-        self.session = LeetcodeSession()
-        self.session.set_config('default_lang', lang)
+
+        configs = {}
+        if self.vim.vars.get('leetcode_default_lang'):
+            lang = self.vim.eval('g:leetcode_default_lang')
+            if lang:
+                configs['default_lang'] = lang
+
+        if self.vim.vars.get('leetcode_repo_path'):
+            repo_path = self.vim.eval('g:leetcode_repo_path')
+            if repo_path:
+                if not repo_path.endswith(os.path.sep):
+                    repo_path += os.path.sep
+                configs['repo_path'] = repo_path
+
+        if self.vim.vars.get('leetcode_repo_remote'):
+            repo_remote = self.vim.eval('g:leetcode_repo_remote')
+            if repo_remote:
+                configs['repo_remote'] = repo_remote
+
+        self.session = LeetcodeSession(configs)
 
     def _echo(self, message):
+        message = message.replace('\"', '')
         self.vim.command('echo "' + message + '"')
 
     @staticmethod
@@ -529,7 +579,7 @@ class LeetcodePlugin(object):
                     lang = args[0].lower()
                 if not lang:
                     lang = self.session.get_config('default_lang')
-                f, msg = self.session.get_problem_code(problem_id, title, lang, True)
+                f, msg = self.session.get_problem_code(int(problem_id), title, lang, True)
                 if f:
                     self.vim.command('e ' + f)
                     self.vim.command('set modifiable')
@@ -549,7 +599,7 @@ class LeetcodePlugin(object):
             problem_id, title, ext = self._extract_problem_data(buf_name)
             lang = self.find_lang_by_extension(ext)
             if problem_id and title and lang:
-                f, msg = self.session.get_problem_code(problem_id, title, lang, False)
+                f, msg = self.session.get_problem_code(int(problem_id), title, lang, False)
                 if f:
                     self.vim.command('e ' + f)
                     self.vim.command('set modifiable')
@@ -571,7 +621,7 @@ class LeetcodePlugin(object):
             if ext:
                 lang = self.find_lang_by_extension(ext)
             if problem_id and title and lang:
-                result_msg = self.session.test(problem_id, title, lang, testcases)
+                result_msg = self.session.test(int(problem_id), title, lang, testcases)
                 self._echo(result_msg)
             else:
                 self._echo('Not a valid solution file!')
@@ -588,7 +638,7 @@ class LeetcodePlugin(object):
             if ext:
                 lang = self.find_lang_by_extension(ext)
             if problem_id and title and lang:
-                result_msg = self.session.submit(problem_id, title, lang)
+                result_msg = self.session.submit(int(problem_id), title, lang)
                 self._echo(result_msg)
             else:
                 self._echo('Not a valid solution file!')
@@ -610,7 +660,7 @@ class LeetcodePlugin(object):
                     lang = args[0].lower()
                 if not lang:
                     lang = self.session.get_config('default_lang')
-                f, msg = self.session.get_last_submission(problem_id, title, lang)
+                f, msg = self.session.get_last_submission(int(problem_id), title, lang)
                 if f:
                     self.vim.command('e ' + f)
                     self.vim.command('set modifiable')
