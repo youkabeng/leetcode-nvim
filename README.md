@@ -9,9 +9,9 @@ Login with browser cookies and happy coding.
 
 ## <a id="installing"></a>Installing
 
-This plugin is written in python3 and you need to install requests and beautifulsoup4.
+This plugin is written in python3 and you need to install some packages.
 ```
-pip install requests beautifulsoup4
+pip install requests beautifulsoup4 playsound
 ```
 
 Use Plug-Vim
@@ -59,6 +59,20 @@ You can use github to keep track of your progress.
 
 ```
 let g:leetcode_repo_path = '/your/repo/path'
+```
+
+(Optional) Add something interesting to this small plugin.    
+You can specify two sound files(wav and mp3 supported) to enable some sound effect.    
+The send_ringtone will be played every time the command is sent.    
+The pass_ringtone will be played when your answer is accepted.    
+
+**YOUR EVERY SUBMIT COUNTS AND ENJOY EVOLVING!**
+
+But please be noted, the volume can't be setup separately for now.
+
+```
+let g:leetcode_pass_ringtone = '/your/sound/ringtone/xx.mp3'
+let g:leetcode_send_ringtone = '/your/sound/ringtone/yy.mp3'
 ```
 
 

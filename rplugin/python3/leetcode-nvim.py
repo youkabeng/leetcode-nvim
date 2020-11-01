@@ -4,11 +4,17 @@ import pathlib
 import re
 import shutil
 import subprocess
+import threading
 
 import neovim
 import requests
 import time
 from bs4 import BeautifulSoup
+
+try:
+    from playsound import playsound
+except ImportError:
+    playsound = None
 
 LC_HOME = '.leetcode-nvim/'
 LC_CONFIG = LC_HOME + 'config.json'
@@ -129,6 +135,17 @@ class LeetcodeSession:
 
     def _get_path(self, path):
         return self._get_user_home() + path
+
+    def play_ringtone(self, name):
+        sound_path = self.get_config(name)
+        if sound_path is not None:
+            if playsound:
+                def play(p):
+                    playsound(p)
+
+                th = threading.Thread(target=play, args=(sound_path,))
+                th.daemon = True
+                th.start()
 
     def _init_leetcode_home(self):
         leetcode_home = self._get_path(LC_HOME)
@@ -313,6 +330,7 @@ class LeetcodeSession:
                 and self.has_repo_path():
             self._init_lang_dir(lang, self._repo_solution_dir)
             shutil.copyfile(fp, self._repo_solution_dir + lang + '/' + fn)
+            self.play_ringtone('pass_ringtone')
         return self._build_submit_code_output(jo)
 
     def get_last_submission(self, problem_id, title, lang):
@@ -500,6 +518,18 @@ class LeetcodePlugin(object):
             if repo_remote:
                 configs['repo_remote'] = repo_remote
 
+        self._pass_ringtone = None
+        if self.vim.vars.get('leetcode_pass_ringtone'):
+            ringtone = self.vim.eval('g:leetcode_pass_ringtone')
+            if ringtone:
+                configs['pass_ringtone'] = ringtone
+
+        self._send_ringtone = None
+        if self.vim.vars.get('leetcode_send_ringtone'):
+            ringtone = self.vim.eval('g:leetcode_send_ringtone')
+            if ringtone:
+                configs['send_ringtone'] = ringtone
+
         self.session = LeetcodeSession(configs)
 
     def _echo(self, message):
@@ -536,6 +566,7 @@ class LeetcodePlugin(object):
 
     @neovim.function('LCLoginWithCookie')
     def lc_login_with_cookie(self, args):
+        self.session.play_ringtone('send_ringtone')
         self.session.login(args[0], args[1], args[2])
         if self.session.is_logged_in():
             self._echo('Successfully logged in with browser cookie!')
@@ -544,6 +575,7 @@ class LeetcodePlugin(object):
 
     @neovim.function('LCListProblems')
     def lc_list_problems(self, args):
+        self.session.play_ringtone('send_ringtone')
         if self.session.is_logged_in():
             category = 'all'
             use_cache = True
@@ -566,6 +598,7 @@ class LeetcodePlugin(object):
 
     @neovim.function('LCCoding')
     def lc_coding(self, args):
+        self.session.play_ringtone('send_ringtone')
         if self.session.is_logged_in():
             buf_name = self.vim.current.buffer.name
             buf_name = buf_name.split('/')[-1]
@@ -593,6 +626,7 @@ class LeetcodePlugin(object):
 
     @neovim.function('LCCodingReset')
     def lc_coding_reset(self, args):
+        self.session.play_ringtone('send_ringtone')
         if self.session.is_logged_in():
             buf_name = self.vim.current.buffer.name
             buf_name = buf_name.split('/')[-1]
@@ -609,6 +643,7 @@ class LeetcodePlugin(object):
 
     @neovim.function('LCTest')
     def lc_run(self, args):
+        self.session.play_ringtone('send_ringtone')
         if self.session.is_logged_in():
             buf_name = self.vim.current.buffer.name
             buf_name = buf_name.split('/')[-1]
@@ -630,6 +665,7 @@ class LeetcodePlugin(object):
 
     @neovim.function('LCSubmit')
     def lc_submit(self, args):
+        self.session.play_ringtone('send_ringtone')
         if self.session.is_logged_in():
             buf_name = self.vim.current.buffer.name.strip()
             buf_name = buf_name.split('/')[-1]
@@ -647,6 +683,7 @@ class LeetcodePlugin(object):
 
     @neovim.function("LCGetLatestSubmission")
     def lc_get_latest_submission(self, args):
+        self.session.play_ringtone('send_ringtone')
         if self.session.is_logged_in():
             buf_name = self.vim.current.buffer.name
             buf_name = buf_name.split('/')[-1]
