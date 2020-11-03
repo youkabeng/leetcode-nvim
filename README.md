@@ -96,12 +96,15 @@ call LCListProblems()
 
 ```
 call LCCoding()
+call LCCoding('cpp')
 ```
 
 4. Test your code with test function
+You can input your testcase as a parameter.
 
 ```
 call LCTest()
+call LCTest('"abcbc"')
 ```
 
 5. Retrieve latest submission
