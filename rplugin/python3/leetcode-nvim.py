@@ -30,14 +30,20 @@ LC_PROBLEM_DATABASE = 'database'
 LC_PROBLEM_SHELL = 'shell'
 LC_PROBLEM_CONCURRENCY = 'concurrency'
 
-LC_PROBLEM_REPR_FULL = 'No. %04d %s <%s>'
+LC_PROBLEM_REPR_FULL = 'No. %04d %s <%s> _%s_'
 LC_PROBLEM_REPR_COMPACT = 'no-%04d-%s'
 
-REGEXP_LINE = 'No\\. (\\d+) .* <([A-Za-z0-9\\-]*)>'
+REGEXP_LINE = 'No\\. (\\d+) .* <([A-Za-z0-9\\-]*)> .*'
 REGEXP_LINE_COMAPCT = 'no-(\\d+)-(.+)\\.([a-z]+)'
 
 LC_ENDPOINT_CN = "leetcode-cn.com"
 LC_ENDPOINT_US = "leetcode.com"
+
+LEVELS = {
+    1: 'Easy',
+    2: 'Medium',
+    3: 'Hard'
+}
 
 URLS = {
     'home': 'https://%s',
@@ -168,8 +174,8 @@ class LeetcodeSession:
         return LC_PROBLEM_REPR_COMPACT % (int(problem_id), title)
 
     @staticmethod
-    def _problem_repr_full(problem_id, title, title_full):
-        return LC_PROBLEM_REPR_FULL % (int(problem_id), title_full, title)
+    def _problem_repr_full(problem_id, title, title_full, level):
+        return LC_PROBLEM_REPR_FULL % (int(problem_id), title_full, title, LEVELS[level])
 
     def get_config(self, key):
         return self._configs.get(key)
@@ -223,7 +229,8 @@ class LeetcodeSession:
         tmpf = self._get_path(LC_PROBLEMS_TMP)
         lines = list(map(lambda x: self._problem_repr_full(x['stat']['question_id'],
                                                            x['stat']['question__title_slug'].strip(),
-                                                           x['stat']['question__title'].strip()),
+                                                           x['stat']['question__title'].strip(),
+                                                           x['difficulty']['level']),
                          sorted(problems, key=lambda x: x['stat']['question_id'])))
         with open(tmpf, 'w') as outf:
             outf.write('\n'.join(lines))
@@ -287,7 +294,10 @@ class LeetcodeSession:
                 return ('Wrong Answer\nInput:\n%s\nExpected Output:\n%s\nOutput:\n%s'
                         % (testcases, d['expected_code_answer'], d['code_answer'],))
         else:
-            return '%s\n%s' % (d['status_msg'], d['full_compile_error'])
+            error = d.get('full_compile_error')
+            if error is None:
+                error = d.get('full_runtime_error')
+            return '%s\n%s' % (d['status_msg'], error)
 
     @staticmethod
     def _build_submit_code_output(d):
@@ -573,6 +583,22 @@ class LeetcodePlugin(object):
         else:
             self._echo("Failed to login, please check your cookie's expiation!")
 
+    def _hl_difficulty_label(self):
+        self.vim.command('syntax keyword hlg_easy _Easy_')
+        self.vim.command('highlight link hlg_easy keyword')
+        self.vim.command('syntax keyword hlg_medium _Medium_')
+        self.vim.command('highlight link hlg_medium keyword')
+        self.vim.command('syntax keyword hlg_hard _Hard_')
+        self.vim.command('highlight link hlg_hard keyword')
+        self.vim.command('highlight hlg_easy ctermfg=green guifg=green')
+        self.vim.command('highlight hlg_medium ctermfg=yellow guifg=yellow')
+        self.vim.command('highlight hlg_hard ctermfg=red guifg=red')
+
+    def _hl_ac_line(self, line_no):
+        self.vim.command('highlight hlg_ac ctermfg=240 guifg=240')
+        self.vim.command('sign define ac_line linehl=hlg_ac')
+        self.vim.command('sign place 1 name=ac_line line=' + str(line_no))
+
     @neovim.function('LCListProblems')
     def lc_list_problems(self, args):
         self.session.play_ringtone('send_ringtone')
@@ -591,6 +617,7 @@ class LeetcodePlugin(object):
             f, msg = self.session.get_problems(category, use_cache)
             self.vim.command('e ' + f)
             self.vim.command('set nomodifiable')
+            self._hl_difficulty_label()
             # self.vim.current.buffer.add_highlight('String', 1, 0, -1, -1)
             self._echo(msg)
         else:
