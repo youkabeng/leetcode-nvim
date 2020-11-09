@@ -676,6 +676,8 @@ class LeetcodePlugin(object):
             buf_name = buf_name.split('/')[-1]
             if len(args) > 0:
                 testcases = args[0]
+                if '//n//' in testcases:
+                    testcases = testcases.replace('//n//', '\n')
             else:
                 testcases = None
             lang = None
@@ -731,3 +733,11 @@ class LeetcodePlugin(object):
                     self._echo(msg)
         else:
             self._echo('Login with browser cookie first!')
+
+
+s = LeetcodeSession({
+    'default_lang': 'c'
+})
+
+s.test(283, 'move-zeroes', 'c', None)
+print()

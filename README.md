@@ -99,8 +99,11 @@ call LCCoding()
 call LCCoding('cpp')
 ```
 
-4. Test your code with test function
+4. Test your code with test function.
+
 You can input your testcase as a parameter.
+
+Use '//n//' to represent '\n'
 
 ```
 call LCTest()
