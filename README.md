@@ -75,6 +75,19 @@ let g:leetcode_pass_ringtone = '/your/sound/ringtone/xx.mp3'
 let g:leetcode_send_ringtone = '/your/sound/ringtone/yy.mp3'
 ```
 
+(Optional) Shortcuts
+
+Feel free to change key bindings.
+
+```
+noremap <Leader>lcl :call LCListProblems()<CR>
+noremap <Leader>lcc :call LCCoding()<CR>
+noremap <Leader>lct :call LCTest()<CR>
+noremap <Leader>lcs :call LCSubmit()<CR>
+noremap <Leader>lcg :call LCGetLatestSubmission()<CR>
+noremap <Leader>lcr :call LCCodingReset()<CR>
+```
+
 
 ## <a id="usage"></a>Usage
 
@@ -126,6 +139,3 @@ call LCCodingReset()
 ```
 call LCSubmit()
 ```
-
-
-

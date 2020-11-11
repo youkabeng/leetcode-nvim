@@ -584,17 +584,21 @@ class LeetcodePlugin(object):
             self._echo("Failed to login, please check your cookie's expiation!")
 
     def _hl_difficulty_label(self):
+        self.vim.command('hi clear hlg_easy')
+        self.vim.command('hi clear hlg_medium')
+        self.vim.command('hi clear hlg_hard')
         self.vim.command('syntax keyword hlg_easy _Easy_')
-        self.vim.command('highlight link hlg_easy keyword')
         self.vim.command('syntax keyword hlg_medium _Medium_')
-        self.vim.command('highlight link hlg_medium keyword')
         self.vim.command('syntax keyword hlg_hard _Hard_')
+        self.vim.command('highlight link hlg_easy keyword')
+        self.vim.command('highlight link hlg_medium keyword')
         self.vim.command('highlight link hlg_hard keyword')
         self.vim.command('highlight hlg_easy ctermfg=green guifg=green')
         self.vim.command('highlight hlg_medium ctermfg=yellow guifg=yellow')
         self.vim.command('highlight hlg_hard ctermfg=red guifg=red')
 
     def _hl_ac_line(self, line_no):
+        self.vim.command('hi clear hlg_ac')
         self.vim.command('highlight hlg_ac ctermfg=240 guifg=240')
         self.vim.command('sign define ac_line linehl=hlg_ac')
         self.vim.command('sign place 1 name=ac_line line=' + str(line_no))
@@ -733,11 +737,3 @@ class LeetcodePlugin(object):
                     self._echo(msg)
         else:
             self._echo('Login with browser cookie first!')
-
-
-s = LeetcodeSession({
-    'default_lang': 'c'
-})
-
-s.test(283, 'move-zeroes', 'c', None)
-print()
