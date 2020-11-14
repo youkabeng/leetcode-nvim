@@ -11,7 +11,7 @@ Login with browser cookies and happy coding.
 
 This plugin is written in python3 and you need to install some packages.
 ```
-pip install requests beautifulsoup4 playsound
+pip install pynvim requests beautifulsoup4 playsound
 ```
 
 Use Plug-Vim
