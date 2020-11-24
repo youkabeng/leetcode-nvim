@@ -21,6 +21,7 @@ LC_CONFIG = LC_HOME + 'config.json'
 LC_SESSION = LC_HOME + 'session.json'
 LC_PROBLEMS = LC_HOME + 'problems.json'
 LC_PROBLEMS_TMP = LC_HOME + 'problems_tmp.txt'
+LC_ACLIST = LC_HOME + 'ac.txt'
 LC_PROBLEMS_HOME = LC_HOME + 'problems/'
 LC_SOLUTIONS_HOME = LC_HOME + 'solutions/'
 
@@ -227,6 +228,7 @@ class LeetcodeSession:
 
         problems = jo['stat_status_pairs']
         tmpf = self._get_path(LC_PROBLEMS_TMP)
+
         lines = list(map(lambda x: self._problem_repr_full(x['stat']['question_id'],
                                                            x['stat']['question__title_slug'].strip(),
                                                            x['stat']['question__title'].strip(),
@@ -234,7 +236,21 @@ class LeetcodeSession:
                          sorted(problems, key=lambda x: x['stat']['question_id'])))
         with open(tmpf, 'w') as outf:
             outf.write('\n'.join(lines))
-        return tmpf, 'All problems loaded!'
+
+        ac_lines = []
+        acf = self._get_path(LC_ACLIST)
+        if os.path.exists(acf):
+            with open(self._get_path(LC_ACLIST), 'r') as inf:
+                ac_ids = set(inf.readlines())
+                ac_ids = list(map(str.strip, ac_ids))
+                if ac_ids:
+                    for i in range(len(lines)):
+                        line = lines[i]
+                        problem_id = str(int(line.split(' ')[1]))
+                        if problem_id in ac_ids:
+                            ac_lines.append(i + 1)
+
+        return tmpf, ac_lines, 'All problems loaded!'
 
     def _get_problem(self, problem_id, title, use_cache=True):
         f = self._get_path(LC_PROBLEMS_HOME) + self._problem_repr_compact(problem_id, title) + '.json'
@@ -256,6 +272,8 @@ class LeetcodeSession:
             return f, 'Happy coding! ^_^'
         self._init_lang_dir(lang, path=self._get_path(LC_SOLUTIONS_HOME))
         jo = self._get_problem(problem_id, title)
+        if jo['data']['question']['status'] == 'ac':
+            self._update_ac_list(problem_id)
         lines = self._html2text(jo['data']['question']['content']).split('\n')
         comment = COMMENTS[lang]
         lines.insert(0, '@desc-start')
@@ -328,6 +346,17 @@ class LeetcodeSession:
         jo = self._api.test(problem_id, title, lang, self._cut_codes(code_lines), testcases)
         return self._build_test_code_output(jo, testcases)
 
+    def _update_ac_list(self, problem_id):
+        f = self._get_path(LC_ACLIST)
+        ac_ids = set()
+        if os.path.exists(f):
+            with open(f, 'r') as inf:
+                ac_ids = set(inf.readlines())
+        ac_ids.add(problem_id)
+        with open(f, 'w') as outf:
+            ac_ids = list(map(lambda x:str(x), ac_ids))
+            outf.writelines(ac_ids)
+
     def submit(self, problem_id, title, lang):
         fn = self._problem_repr_compact(problem_id, title) + EXTENSIONS[lang]
         fp = self._get_path(LC_SOLUTIONS_HOME) + lang + '/' + fn
@@ -341,6 +370,7 @@ class LeetcodeSession:
             self._init_lang_dir(lang, self._repo_solution_dir)
             shutil.copyfile(fp, self._repo_solution_dir + lang + '/' + fn)
             self.play_ringtone('pass_ringtone')
+            self._update_ac_list(problem_id)
         return self._build_submit_code_output(jo)
 
     def get_last_submission(self, problem_id, title, lang):
@@ -360,6 +390,10 @@ class LeetcodeSession:
             return f, 'No code found!'
         else:
             return f, 'Latest submission is retrieved!'
+
+    def get_ac_line_numbers(self):
+        f = self._get_path(LC_ACLIST)
+        acset = None
 
     @staticmethod
     def _html2text(html):
@@ -397,7 +431,8 @@ class _LeetcodeApi:
         return {
             'Host': self._host(),
             'Cookie': self._build_cookie_string(),
-            'x-csrftoken': self._csrftoken
+            'X-CSRFToken': self._csrftoken,
+            'X-Requested-With': 'XMLHttpRequest'
         }
 
     @staticmethod
@@ -597,11 +632,12 @@ class LeetcodePlugin(object):
         self.vim.command('highlight hlg_medium ctermfg=yellow guifg=yellow')
         self.vim.command('highlight hlg_hard ctermfg=red guifg=red')
 
-    def _hl_ac_line(self, line_no):
+    def _hl_ac_lines(self, lines):
         self.vim.command('hi clear hlg_ac')
         self.vim.command('highlight hlg_ac ctermfg=240 guifg=240')
         self.vim.command('sign define ac_line linehl=hlg_ac')
-        self.vim.command('sign place 1 name=ac_line line=' + str(line_no))
+        for line_no in lines:
+            self.vim.command('sign place 1 name=ac_line line=' + str(line_no))
 
     @neovim.function('LCListProblems')
     def lc_list_problems(self, args):
@@ -618,11 +654,11 @@ class LeetcodePlugin(object):
                 else:
                     use_cache = False
             self._echo('Loading problems...')
-            f, msg = self.session.get_problems(category, use_cache)
+            f, ac_lines, msg = self.session.get_problems(category, use_cache)
             self.vim.command('e ' + f)
             self.vim.command('set nomodifiable')
             self._hl_difficulty_label()
-            # self.vim.current.buffer.add_highlight('String', 1, 0, -1, -1)
+            self._hl_ac_lines(ac_lines)
             self._echo(msg)
         else:
             self._echo('Login with browser cookie first!')
@@ -737,3 +773,8 @@ class LeetcodePlugin(object):
                     self._echo(msg)
         else:
             self._echo('Login with browser cookie first!')
+
+#
+# s = LeetcodeSession({})
+# f, ac_lines, msg = s.get_problems("all")
+# print()
