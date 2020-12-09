@@ -1,13 +1,12 @@
 import json
+import neovim
 import os
 import pathlib
 import re
+import requests
 import shutil
 import subprocess
 import threading
-
-import neovim
-import requests
 import time
 from bs4 import BeautifulSoup
 
@@ -21,6 +20,7 @@ LC_CONFIG = LC_HOME + 'config.json'
 LC_SESSION = LC_HOME + 'session.json'
 LC_PROBLEMS = LC_HOME + 'problems.json'
 LC_PROBLEMS_TMP = LC_HOME + 'problems_tmp.txt'
+LC_CARDS_TMP = LC_HOME + 'cards_tmp.txt'
 LC_ACLIST = LC_HOME + 'ac.txt'
 LC_PROBLEMS_HOME = LC_HOME + 'problems/'
 LC_SOLUTIONS_HOME = LC_HOME + 'solutions/'
@@ -31,19 +31,20 @@ LC_PROBLEM_DATABASE = 'database'
 LC_PROBLEM_SHELL = 'shell'
 LC_PROBLEM_CONCURRENCY = 'concurrency'
 
-LC_PROBLEM_REPR_FULL = 'No. %04d %s <%s> _%s_'
+LC_PROBLEM_REPR_FULL = 'No. %04d %s %s'
 LC_PROBLEM_REPR_COMPACT = 'no-%04d-%s'
 
 REGEXP_LINE = 'No\\. (\\d+) .* <([A-Za-z0-9\\-]*)> .*'
+REGEXP_ATTRS = '___([a-zA-Z0-9-_=]+)___'
 REGEXP_LINE_COMAPCT = 'no-(\\d+)-(.+)\\.([a-z]+)'
 
 LC_ENDPOINT_CN = "leetcode-cn.com"
 LC_ENDPOINT_US = "leetcode.com"
 
 LEVELS = {
-    1: 'Easy',
-    2: 'Medium',
-    3: 'Hard'
+    1: '<E>',
+    2: '<M>',
+    3: '<H>'
 }
 
 URLS = {
@@ -55,10 +56,12 @@ URLS = {
     'favorites': 'https://%s/problems/api/favorites/',
     'graphql': 'https://%s/graphql',
     'referer': 'https://%s/problems/%s/',
+    'card_referer': 'https://%s/explore/%s/card/%s/',
     'run': 'https://%s/problems/%s/interpret_solution/',
     'run_check': 'https://%s/submissions/detail/%s/check/',
     'latest_submission': 'https://%s/submissions/latest/',
-    'submit': 'https://%s/problems/%s/submit/'
+    'submit': 'https://%s/problems/%s/submit/',
+    'explore': 'https://%s/explore/'
 }
 
 EXTENSIONS = {
@@ -98,6 +101,25 @@ COMMENTS = {
 }
 
 
+class Line(object):
+    def __init__(self, text, attrs):
+        self._text = text
+        self._attrs = attrs
+
+    def _build(self):
+        items = [self._text, "{{{"]
+        for k, v in self._attrs:
+            items.append('___%s=%s___' % (k, v))
+        items.append("}}}")
+        return ' '.join(items)
+
+    def __str__(self):
+        return self._build()
+
+    def __repr__(self):
+        return self._build()
+
+
 class LeetcodeSession:
 
     def __init__(self, configs):
@@ -120,6 +142,9 @@ class LeetcodeSession:
 
     def _init_api(self):
         self._api = _LeetcodeApi(self._endpoint, self._csrftoken, self._leetcode_session)
+
+    def get_api(self):
+        return self._api
 
     def _init_repo(self):
         repo_path = self._configs['repo_path']
@@ -175,8 +200,8 @@ class LeetcodeSession:
         return LC_PROBLEM_REPR_COMPACT % (int(problem_id), title)
 
     @staticmethod
-    def _problem_repr_full(problem_id, title, title_full, level):
-        return LC_PROBLEM_REPR_FULL % (int(problem_id), title_full, title, LEVELS[level])
+    def _problem_repr_full(problem_id, title_full, level):
+        return LC_PROBLEM_REPR_FULL % (int(problem_id), LEVELS[level], title_full)
 
     def get_config(self, key):
         return self._configs.get(key)
@@ -229,28 +254,29 @@ class LeetcodeSession:
         problems = jo['stat_status_pairs']
         tmpf = self._get_path(LC_PROBLEMS_TMP)
 
-        lines = list(map(lambda x: self._problem_repr_full(x['stat']['question_id'],
-                                                           x['stat']['question__title_slug'].strip(),
-                                                           x['stat']['question__title'].strip(),
-                                                           x['difficulty']['level']),
-                         sorted(problems, key=lambda x: x['stat']['question_id'])))
+        ac_ids = []
+        acf = self._get_path(LC_ACLIST)
+        if os.path.exists(acf):
+            with open(acf, 'r') as inf:
+                ac_ids = list(map(str.strip, inf.readlines()))
+
+        def build_text(x):
+            qid = x['stat']['question_id']
+            title = x['stat']['question__title']
+            title_slug = x['stat']['question__title_slug']
+            level = x['difficulty']['level']
+            text = self._problem_repr_full(qid, title, level)
+            attrs = [('question_id', qid), ('title_slug', title_slug), ('level', level)]
+            if str(qid).strip() in ac_ids:
+                attrs.append(('status', 'ac'))
+            return Line(text, attrs=attrs).__str__()
+
+        lines = list(map(build_text, sorted(problems, key=lambda x: x['stat']['question_id'])))
+
         with open(tmpf, 'w') as outf:
             outf.write('\n'.join(lines))
 
-        ac_lines = []
-        acf = self._get_path(LC_ACLIST)
-        if os.path.exists(acf):
-            with open(self._get_path(LC_ACLIST), 'r') as inf:
-                ac_ids = set(inf.readlines())
-                ac_ids = list(map(str.strip, ac_ids))
-                if ac_ids:
-                    for i in range(len(lines)):
-                        line = lines[i]
-                        problem_id = str(int(line.split(' ')[1]))
-                        if problem_id in ac_ids:
-                            ac_lines.append(i + 1)
-
-        return tmpf, ac_lines, 'All problems loaded!'
+        return tmpf, 'All problems loaded!'
 
     def _get_problem(self, problem_id, title, use_cache=True):
         f = self._get_path(LC_PROBLEMS_HOME) + self._problem_repr_compact(problem_id, title) + '.json'
@@ -258,7 +284,7 @@ class LeetcodeSession:
             with open(f, 'r') as inf:
                 jo = json.load(inf)
         else:
-            resp_text = self._api.get_problem(title)
+            resp_text = self._api.graphql_question_data(title)
             with open(f, 'w') as outf:
                 outf.write(resp_text)
             jo = json.loads(resp_text)
@@ -348,14 +374,13 @@ class LeetcodeSession:
 
     def _update_ac_list(self, problem_id):
         f = self._get_path(LC_ACLIST)
-        ac_ids = set()
+        ac_ids = []
         if os.path.exists(f):
             with open(f, 'r') as inf:
-                ac_ids = set(inf.readlines())
-        ac_ids.add(problem_id)
+                ac_ids = list(map(str.strip, inf.readlines()))
+        ac_ids.append(str(int(problem_id)))
         with open(f, 'w') as outf:
-            ac_ids = list(map(lambda x:str(x), ac_ids))
-            outf.writelines(ac_ids)
+            outf.write('\n'.join(ac_ids))
 
     def submit(self, problem_id, title, lang):
         fn = self._problem_repr_compact(problem_id, title) + EXTENSIONS[lang]
@@ -391,14 +416,19 @@ class LeetcodeSession:
         else:
             return f, 'Latest submission is retrieved!'
 
-    def get_ac_line_numbers(self):
-        f = self._get_path(LC_ACLIST)
-        acset = None
-
     @staticmethod
     def _html2text(html):
         soup = BeautifulSoup(html, 'html.parser')
         return soup.text
+
+    def get_cards(self, category):
+        tmpf = self._get_path(LC_PROBLEMS_TMP)
+        jo = json.loads(self._api.graphql_get_categories())
+        cards = list(filter(lambda x: x['slug'] == category, jo['data']['categories']))[0]['cards']
+        lines = list(map(lambda x: x['title'], cards))
+        with open(tmpf, 'w') as outf:
+            outf.write('\n'.join(lines))
+        return tmpf, 'All cards loaded'
 
 
 class _LeetcodeApi:
@@ -457,7 +487,7 @@ class _LeetcodeApi:
         resp = _LeetcodeApi._do_get(url, headers=self._build_headers())
         return resp.text
 
-    def get_problem(self, title):
+    def graphql_question_data(self, title):
         url = self._url('graphql')
         resp = self._do_post(url, headers={
             **self._build_headers(),
@@ -467,26 +497,290 @@ class _LeetcodeApi:
             'variables': {
                 'titleSlug': title
             },
-            'query': '\n'.join([
-                'query questionData($titleSlug: String!) {',
-                '    question(titleSlug: $titleSlug) {',
-                '        title',
-                '        titleSlug',
-                '        content',
-                '        isPaidOnly',
-                '        difficulty',
-                '        isLiked',
-                '        codeSnippets {'
-                '            lang',
-                '            langSlug',
-                '            code',
-                '        }',
-                '        hints',
-                '        status',
-                '        sampleTestCase',
-                '    }',
-                '}'
-            ])
+            'query': 'query questionData($titleSlug: String!) {'
+                     '  question(titleSlug: $titleSlug) {'
+                     '    title'
+                     '    titleSlug'
+                     '    content'
+                     '    isPaidOnly'
+                     '    difficulty'
+                     '    isLiked'
+                     '    codeSnippets {'
+                     '      lang'
+                     '      langSlug'
+                     '      code'
+                     '    }'
+                     '    hints'
+                     '    status'
+                     '    sampleTestCase'
+                     '  }'
+                     '}'
+        })
+        return resp.text
+
+    def graphql_get_categories(self):
+        url = self._url('graphql')
+        resp = self._do_post(url, headers={
+            **self._build_headers(),
+            'Referer': self._url('explore')
+        }, form_data={
+            'operationName': 'GetCategories',
+            'variables': {
+                'num': 8
+            },
+            'query': 'query GetCategories($categorySlug: String, $num: Int) {'
+                     '  categories(slug: $categorySlug) {'
+                     '    id'
+                     '    title'
+                     '    slug'
+                     '    cards(num: $num) {'
+                     '      ...CardDetailFragment'
+                     '      __typename'
+                     '    }'
+                     '    __typename'
+                     '  }'
+                     '  mostRecentCard {'
+                     '    ...CardDetailFragment'
+                     '    progress'
+                     '    __typename'
+                     '  }'
+                     '  allProgress'
+                     '}'
+                     'fragment CardDetailFragment on CardNode {'
+                     '  id'
+                     '  img'
+                     '  title'
+                     '  slug'
+                     '  categorySlug'
+                     '  description'
+                     '  createdAt'
+                     '  lastModified'
+                     '  paidOnly'
+                     '  published'
+                     '  numChapters'
+                     '  numItems'
+                     '  codingChallengeInfo {'
+                     '    startDate'
+                     '    containsPremium'
+                     '    __typename'
+                     '  }'
+                     '  __typename'
+                     '}'
+        })
+        return resp.text
+
+    def graphql_get_card_detail(self, category, card_slug):
+        url = self._url('graphql')
+        resp = self._do_post(url, headers={
+            **self._build_headers(),
+            'Referer': self._url('card_referer', category, card_slug)
+        }, form_data={
+            'operationName': 'GetCardDetail',
+            'variables': {
+                'cardSlug': card_slug
+            },
+            'query': 'query GetCardDetail($cardSlug: String!) {'
+                     '  card(cardSlug: $cardSlug) {'
+                     '    id'
+                     '    title'
+                     '    slug'
+                     '    description'
+                     '    banner'
+                     '    bannerBackground'
+                     '    introduction'
+                     '    introText'
+                     '    progress'
+                     '    paidOnly'
+                     '    published'
+                     '    isFavorite'
+                     '    codingChallengeInfo {'
+                     '      startDate'
+                     '      containsPremium'
+                     '      __typename'
+                     '    }'
+                     '    prevCompleteLinkInfo'
+                     '    isPreview'
+                     '    __typename'
+                     '  }'
+                     '  isCurrentUserAuthenticated'
+                     '}'
+        })
+        return resp.text
+
+    def graphql_get_chapters(self, category, card_slug):
+        url = self._url('graphql')
+        resp = self._do_post(url, headers={
+            **self._build_headers(),
+            'Referer': self._url('card_referer', category, card_slug)
+        }, form_data={
+            'operationName': 'GetChapters',
+            'variables': {
+                'cardSlug': card_slug
+            },
+            'query': 'query GetChapters($cardSlug: String!) {'
+                     '  chapters(cardSlug: $cardSlug) {'
+                     '    descriptionText'
+                     '    id'
+                     '    title'
+                     '    slug'
+                     '    __typename'
+                     '  }'
+                     '}'
+        })
+        return resp.text
+
+    def graphql_get_chapter(self, category, card_slug):
+        url = self._url('graphql')
+        resp = self._do_post(url, headers={
+            **self._build_headers(),
+            'Referer': self._url('card_referer', category, card_slug)
+        }, form_data={
+            'operationName': 'GetChapter',
+            'variables': {
+                'cardSlug': card_slug
+            },
+            'query': 'query GetChapter($chapterId: String, $cardSlug: String) {'
+                     '  chapter(chapterId: $chapterId, cardSlug: $cardSlug) {'
+                     '    ...ExtendedChapterDetail'
+                     '    description'
+                     '    __typename'
+                     '  }'
+                     '}'
+                     'fragment ExtendedChapterDetail on ChapterNode {'
+                     '  id'
+                     '  title'
+                     '  slug'
+                     '  items {'
+                     '    id'
+                     '    title'
+                     '    type'
+                     '    info'
+                     '    paidOnly'
+                     '    chapterId'
+                     '    isEligibleForCompletion'
+                     '    prerequisites {'
+                     '      id'
+                     '      chapterId'
+                     '      __typename'
+                     '    }'
+                     '    __typename'
+                     '  }'
+                     '  __typename'
+                     '}'
+        })
+        return resp.text
+
+    def graphql_get_item(self, item_id):
+        url = self._url('graphql')
+        resp = self._do_post(url, headers=self._build_headers(), form_data={
+            'operationName': 'GetItem',
+            'variables': {
+                'itemId': item_id
+            },
+            'query': 'query GetItem($itemId: String!) {'
+                     '  item(id: $itemId) {'
+                     '    id'
+                     '    title'
+                     '    type'
+                     '    paidOnly'
+                     '    lang'
+                     '    isEligibleForCompletion'
+                     '    hasAppliedTimeTravelTicket'
+                     '    question {'
+                     '      questionId'
+                     '      title'
+                     '      titleSlug'
+                     '      __typename'
+                     '    }'
+                     '    article {'
+                     '      id'
+                     '      title'
+                     '      __typename'
+                     '    }'
+                     '    video {'
+                     '      id'
+                     '      __typename'
+                     '    }'
+                     '    htmlArticle {'
+                     '      id'
+                     '      __typename'
+                     '    }'
+                     '    webPage {'
+                     '      id'
+                     '      __typename'
+                     '    }'
+                     '    __typename'
+                     '  }'
+                     '  isCurrentUserAuthenticated'
+                     '  validTimeTravelTicketCount'
+                     '}'
+        })
+        return resp.text
+
+    def graphql_get_or_create_explore_session(self, card_slug):
+        url = self._url('graphql')
+        resp = self._do_post(url, headers=self._build_headers(), form_data={
+            'operationName': 'GetOrCreateExploreSession',
+            'variables': {
+                'cardSlug': card_slug
+            },
+            'query': 'mutation GetOrCreateExploreSession($cardSlug: String!) {'
+                     '  getOrCreateExploreSession(cardSlug: $cardSlug) {'
+                     '    ok'
+                     '    errors'
+                     '    progress'
+                     '    cardId'
+                     '    __typename'
+                     '  }'
+                     '}'
+        })
+        return resp.text
+
+    def graphql_get_question(self, title_slug):
+        url = self._url('graphql')
+        resp = self._do_post(url, headers=self._build_headers(), form_data={
+            'operationName': 'GetOrCreateExploreSession',
+            'variables': {
+                'titleSlug': title_slug
+            },
+            'query': 'query GetQuestion($titleSlug: String!) {'
+                     '  question(titleSlug: $titleSlug) {'
+                     '    questionId'
+                     '    sessionId'
+                     '    questionTitle'
+                     '    categoryTitle'
+                     '    submitUrl'
+                     '    interpretUrl'
+                     '    codeDefinition'
+                     '    sampleTestCase'
+                     '    enableTestMode'
+                     '    metaData'
+                     '    enableRunCode'
+                     '    enableSubmit'
+                     '    judgerAvailable'
+                     '    infoVerified'
+                     '    envInfo'
+                     '    content'
+                     '    translatedContent'
+                     '    urlManager'
+                     '    hints'
+                     '    solution {'
+                     '      title'
+                     '      content'
+                     '      canSeeDetail'
+                     '      paidOnly'
+                     '      titleSlug'
+                     '      hasVideoSolution'
+                     '      rating {'
+                     '        average'
+                     '        __typename'
+                     '      }'
+                     '      __typename'
+                     '    }'
+                     '    __typename'
+                     '  }'
+                     '  isCurrentUserAuthenticated'
+                     '}'
         })
         return resp.text
 
@@ -517,14 +811,14 @@ class _LeetcodeApi:
             'data_input': testcases,
             'judge_type': 'large',
             'lang': lang,
-            'question_id': problem_id,
+            'question_id': int(problem_id),
             'typed_code': '\n'.join(code_lines)
         })
 
     def submit(self, problem_id, title, lang, code_lines):
         return self._upload_code('submit', 'submission_id', title, form_data={
             'lang': lang,
-            'question_id': problem_id,
+            'question_id': int(problem_id),
             'typed_code': '\n'.join(code_lines)
         })
 
@@ -534,7 +828,7 @@ class _LeetcodeApi:
             **self._build_headers(),
             'Referer': self._url('referer', title)
         }, params={
-            'qid': problem_id,
+            'qid': int(problem_id),
             'lang': lang
         })
         return resp.json()
@@ -582,26 +876,28 @@ class LeetcodePlugin(object):
         self.vim.command('echo "' + message + '"')
 
     @staticmethod
-    def _extract_problem_data(line):
-        if re.match(REGEXP_LINE, line):
-            p = re.compile(REGEXP_LINE)
+    def extract_data_from_line(line):
+        if '{{{' in line:
+            return *LeetcodePlugin._extract_data_from_full_line(line), None
         elif re.match(REGEXP_LINE_COMAPCT, line):
-            p = re.compile(REGEXP_LINE_COMAPCT)
+            return LeetcodePlugin._extract_data_from_compact_line(line)
         else:
             return None, None, None
 
-        tp = p.findall(line)[0]
-        if len(tp) == 3:
-            return tp
-        else:
-            return *tp, None
+    @staticmethod
+    def _extract_data_from_full_line(line):
+        p = re.compile(REGEXP_ATTRS)
+        matched_attrs = p.findall(line)
+        d = {}
+        for attr in matched_attrs:
+            splits = attr.split('=')
+            d[splits[0]] = splits[1]
+        return d['question_id'], d['title_slug']
 
     @staticmethod
-    def _extract_problem_data2(line1, line2):
-        problem_id, title, ext = LeetcodePlugin._extract_problem_data(line1)
-        if not problem_id and not title:
-            problem_id, title, ext = LeetcodePlugin._extract_problem_data(line2)
-        return problem_id, title, ext
+    def _extract_data_from_compact_line(line):
+        p = re.compile(REGEXP_LINE_COMAPCT)
+        return p.findall(line)[0]
 
     @staticmethod
     def find_lang_by_extension(extension):
@@ -618,26 +914,18 @@ class LeetcodePlugin(object):
         else:
             self._echo("Failed to login, please check your cookie's expiation!")
 
-    def _hl_difficulty_label(self):
-        self.vim.command('hi clear hlg_easy')
-        self.vim.command('hi clear hlg_medium')
-        self.vim.command('hi clear hlg_hard')
-        self.vim.command('syntax keyword hlg_easy _Easy_')
-        self.vim.command('syntax keyword hlg_medium _Medium_')
-        self.vim.command('syntax keyword hlg_hard _Hard_')
-        self.vim.command('highlight link hlg_easy keyword')
-        self.vim.command('highlight link hlg_medium keyword')
-        self.vim.command('highlight link hlg_hard keyword')
+    def _setup_problems_page(self):
+        self.vim.command('setlocal conceallevel=2')
+        self.vim.command('setlocal concealcursor=n')
+        self.vim.command('syntax match hide_data "{{{.*}}}" conceal')
+        self.vim.command('highlight hlg_ac ctermfg=240 guifg=240')
         self.vim.command('highlight hlg_easy ctermfg=green guifg=green')
         self.vim.command('highlight hlg_medium ctermfg=yellow guifg=yellow')
         self.vim.command('highlight hlg_hard ctermfg=red guifg=red')
-
-    def _hl_ac_lines(self, lines):
-        self.vim.command('hi clear hlg_ac')
-        self.vim.command('highlight hlg_ac ctermfg=240 guifg=240')
-        self.vim.command('sign define ac_line linehl=hlg_ac')
-        for line_no in lines:
-            self.vim.command('sign place 1 name=ac_line line=' + str(line_no))
+        self.vim.command('call matchadd("hlg_easy", ".*level=1.*")')
+        self.vim.command('call matchadd("hlg_medium", ".*level=2.*")')
+        self.vim.command('call matchadd("hlg_hard", ".*level=3.*")')
+        self.vim.command('call matchadd("hlg_ac", ".*status=ac.*")')
 
     @neovim.function('LCListProblems')
     def lc_list_problems(self, args):
@@ -654,11 +942,11 @@ class LeetcodePlugin(object):
                 else:
                     use_cache = False
             self._echo('Loading problems...')
-            f, ac_lines, msg = self.session.get_problems(category, use_cache)
+            f, msg = self.session.get_problems(category, use_cache)
             self.vim.command('e ' + f)
-            self.vim.command('set nomodifiable')
-            self._hl_difficulty_label()
-            self._hl_ac_lines(ac_lines)
+            self.vim.command('setlocal nomodifiable')
+            self.vim.command('setlocal nowrap')
+            self._setup_problems_page()
             self._echo(msg)
         else:
             self._echo('Login with browser cookie first!')
@@ -671,7 +959,9 @@ class LeetcodePlugin(object):
             buf_name = buf_name.split('/')[-1]
             current_line = self.vim.current.line
             lang = None
-            problem_id, title, ext = LeetcodePlugin._extract_problem_data2(current_line, buf_name)
+            problem_id, title, ext = LeetcodePlugin.extract_data_from_line(current_line)
+            if problem_id is None:
+                problem_id, title, ext = LeetcodePlugin.extract_data_from_line(buf_name)
             if ext:
                 lang = self.find_lang_by_extension(ext)
             if problem_id and title:
@@ -679,10 +969,9 @@ class LeetcodePlugin(object):
                     lang = args[0].lower()
                 if not lang:
                     lang = self.session.get_config('default_lang')
-                f, msg = self.session.get_problem_code(int(problem_id), title, lang, True)
+                f, msg = self.session.get_problem_code(problem_id, title, lang, True)
                 if f:
                     self.vim.command('e ' + f)
-                    self.vim.command('set modifiable')
                     self._echo(msg)
                 else:
                     self._echo('No code snippet for ' + lang + ' found!')
@@ -700,10 +989,9 @@ class LeetcodePlugin(object):
             problem_id, title, ext = self._extract_problem_data(buf_name)
             lang = self.find_lang_by_extension(ext)
             if problem_id and title and lang:
-                f, msg = self.session.get_problem_code(int(problem_id), title, lang, False)
+                f, msg = self.session.get_problem_code(problem_id, title, lang, False)
                 if f:
                     self.vim.command('e ' + f)
-                    self.vim.command('set modifiable')
                     self._echo(msg)
             else:
                 self._echo('Only the opened solution file can be reset!')
@@ -712,6 +1000,8 @@ class LeetcodePlugin(object):
     def lc_run(self, args):
         self.session.play_ringtone('send_ringtone')
         if self.session.is_logged_in():
+            self.vim.command("w")
+            self._echo("Testing...")
             buf_name = self.vim.current.buffer.name
             buf_name = buf_name.split('/')[-1]
             if len(args) > 0:
@@ -721,11 +1011,11 @@ class LeetcodePlugin(object):
             else:
                 testcases = None
             lang = None
-            problem_id, title, ext = self._extract_problem_data(buf_name)
+            problem_id, title, ext = self.extract_data_from_line(buf_name)
             if ext:
                 lang = self.find_lang_by_extension(ext)
             if problem_id and title and lang:
-                result_msg = self.session.test(int(problem_id), title, lang, testcases)
+                result_msg = self.session.test(problem_id, title, lang, testcases)
                 self._echo(result_msg)
             else:
                 self._echo('Not a valid solution file!')
@@ -736,14 +1026,16 @@ class LeetcodePlugin(object):
     def lc_submit(self, args):
         self.session.play_ringtone('send_ringtone')
         if self.session.is_logged_in():
+            self.vim.command("w")
+            self._echo("Submiting...")
             buf_name = self.vim.current.buffer.name.strip()
             buf_name = buf_name.split('/')[-1]
             lang = None
-            problem_id, title, ext = self._extract_problem_data(buf_name)
+            problem_id, title, ext = self.extract_data_from_line(buf_name)
             if ext:
                 lang = self.find_lang_by_extension(ext)
             if problem_id and title and lang:
-                result_msg = self.session.submit(int(problem_id), title, lang)
+                result_msg = self.session.submit(problem_id, title, lang)
                 self._echo(result_msg)
             else:
                 self._echo('Not a valid solution file!')
@@ -758,7 +1050,9 @@ class LeetcodePlugin(object):
             buf_name = buf_name.split('/')[-1]
             current_line = self.vim.current.line
             lang = None
-            problem_id, title, ext = LeetcodePlugin._extract_problem_data2(buf_name, current_line)
+            problem_id, title, ext = LeetcodePlugin.extract_data_from_line(current_line)
+            if problem_id is None:
+                problem_id, title, ext = LeetcodePlugin.extract_data_from_line(buf_name)
             if ext:
                 lang = self.find_lang_by_extension(ext)
             if problem_id and title:
@@ -766,15 +1060,28 @@ class LeetcodePlugin(object):
                     lang = args[0].lower()
                 if not lang:
                     lang = self.session.get_config('default_lang')
-                f, msg = self.session.get_last_submission(int(problem_id), title, lang)
+                f, msg = self.session.get_last_submission(problem_id, title, lang)
                 if f:
                     self.vim.command('e ' + f)
-                    self.vim.command('set modifiable')
                     self._echo(msg)
         else:
             self._echo('Login with browser cookie first!')
 
-#
+    @neovim.function("LCGetCards")
+    def lc_get_cards(self, args):
+        self.session.play_ringtone('send_ringtone')
+        if self.session.is_logged_in():
+            self._echo('Loading problems...')
+            f, msg = self.session.get_cards('learn')
+            self.vim.command('e ' + f)
+            self.vim.command('set nomodifiable')
+            self._echo(msg)
+
 # s = LeetcodeSession({})
-# f, ac_lines, msg = s.get_problems("all")
+# f, msg = s.get_cards('learn')
+# txt = s.get_api().graphql_get_categories()
+# f, msg = s.get_problems('all', False)
+# a,b,c = LeetcodePlugin.extract_data_from_line("No. 0001 <E> Two Sum {{{ ___question_id=1___ ___title_slug=two-sum___ ___level=1___ ___status=ac___ }}}")
+# a,b,c = LeetcodePlugin.extract_data_from_line("no-0001-two-sum.java")
+
 # print()
