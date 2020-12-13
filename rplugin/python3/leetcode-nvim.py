@@ -330,18 +330,22 @@ class LeetcodeSession:
         if run_success is None:
             return json.dumps(d)
         elif run_success:
-            correct = d['correct_answer']
+            correct = d.get('correct_answer')
             if correct:
                 return ('Correct\nInput:\n%s\nExpected Output:\n%s\nOutput:\n%s'
-                        % (testcases, d['expected_code_answer'], d['code_answer']))
+                        % (testcases, d.get('expected_code_answer'), d.get('code_answer')))
             else:
                 return ('Wrong Answer\nInput:\n%s\nExpected Output:\n%s\nOutput:\n%s'
-                        % (testcases, d['expected_code_answer'], d['code_answer'],))
+                        % (testcases, d.get('expected_code_answer'), d.get('code_answer'),))
         else:
+            status_msg = d.get('status_msg')
             error = d.get('full_compile_error')
             if error is None:
                 error = d.get('full_runtime_error')
-            return '%s\n%s' % (d['status_msg'], error)
+            if error is None:
+                return status_msg
+            else:
+                return '%s\n%s' % (status_msg, error)
 
     @staticmethod
     def _build_submit_code_output(d):
@@ -349,16 +353,22 @@ class LeetcodeSession:
         if run_success is None:
             return 'Request failed, please try again!'
         elif run_success:
-            all_pass = d['total_correct'] == d['total_testcases']
+            all_pass = d.get('total_correct') == d.get('total_testcases')
             if all_pass:
                 return ('Accepted\nTestcases:\n%d/%d\nRuntime Percentile:\n%02.2f\nMemory Percentile:\n%02.2f'
-                        % (d['total_correct'], d['total_testcases'], d['runtime_percentile'], d['memory_percentile']))
+                        % (d.get('total_correct'), d.get('total_testcases'),
+                           d.get('runtime_percentile'), d.get('memory_percentile')))
             else:
                 return ('Wrong Answer\nTestcases:\n%d/%d\nInput:\n%s\nExpected Output:\n%s\nOutput:\n%s'
-                        % (d['total_correct'], d['total_testcases'], d['input_formatted'], d['expected_output'],
-                           d['code_output']))
+                        % (d.get('total_correct'), d.get('total_testcases'), d.get('input_formatted'),
+                           d.get('expected_output'), d.get('code_output')))
         else:
-            return '%s\n%s' % (d['status_msg'], d['full_compile_error'])
+            status_msg = d.get('status_msg')
+            error = d.get('full_compile_error')
+            if error:
+                return '%s\n%s' % (status_msg, error)
+            else:
+                return status_msg
 
     def test(self, problem_id, title, lang, testcases):
         f = self._get_path(LC_SOLUTIONS_HOME) + lang + '/' \
@@ -955,6 +965,7 @@ class LeetcodePlugin(object):
     def lc_coding(self, args):
         self.session.play_ringtone('send_ringtone')
         if self.session.is_logged_in():
+            self.vim.command('nohl')
             buf_name = self.vim.current.buffer.name
             buf_name = buf_name.split('/')[-1]
             current_line = self.vim.current.line
@@ -984,6 +995,7 @@ class LeetcodePlugin(object):
     def lc_coding_reset(self, args):
         self.session.play_ringtone('send_ringtone')
         if self.session.is_logged_in():
+            self.vim.command('nohl')
             buf_name = self.vim.current.buffer.name
             buf_name = buf_name.split('/')[-1]
             problem_id, title, ext = self._extract_problem_data(buf_name)
