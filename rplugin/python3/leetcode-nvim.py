@@ -998,7 +998,7 @@ class LeetcodePlugin(object):
             self.vim.command('nohl')
             buf_name = self.vim.current.buffer.name
             buf_name = buf_name.split('/')[-1]
-            problem_id, title, ext = self._extract_problem_data(buf_name)
+            problem_id, title, ext = LeetcodePlugin.extract_data_from_line(buf_name)
             lang = self.find_lang_by_extension(ext)
             if problem_id and title and lang:
                 f, msg = self.session.get_problem_code(problem_id, title, lang, False)
@@ -1023,7 +1023,7 @@ class LeetcodePlugin(object):
             else:
                 testcases = None
             lang = None
-            problem_id, title, ext = self.extract_data_from_line(buf_name)
+            problem_id, title, ext = LeetcodePlugin.extract_data_from_line(buf_name)
             if ext:
                 lang = self.find_lang_by_extension(ext)
             if problem_id and title and lang:
@@ -1043,7 +1043,7 @@ class LeetcodePlugin(object):
             buf_name = self.vim.current.buffer.name.strip()
             buf_name = buf_name.split('/')[-1]
             lang = None
-            problem_id, title, ext = self.extract_data_from_line(buf_name)
+            problem_id, title, ext = LeetcodePlugin.extract_data_from_line(buf_name)
             if ext:
                 lang = self.find_lang_by_extension(ext)
             if problem_id and title and lang:
